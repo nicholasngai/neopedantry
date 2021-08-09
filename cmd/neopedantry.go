@@ -12,17 +12,16 @@ import (
 
 var log = logrus.New()
 
-const pingName = "ping"
-
-var interactions = []*discordgo.ApplicationCommand{
-	{
-		Name:        pingName,
-		Description: "Ping!",
-	},
+var commands = []*discordgo.ApplicationCommand{
+	&secretHitlerCommand,
 }
 
-var interactionHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
-	pingName: handlePing,
+var commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
+	secretHitlerName: handleSecretHitlerNewGame,
+}
+
+var handlerLists = [][]interface{}{
+	secretHitlerHandlers,
 }
 
 func registerInteractions(s *discordgo.Session, force bool) (err error) {
@@ -31,21 +30,21 @@ func registerInteractions(s *discordgo.Session, force bool) (err error) {
 	if force {
 		shouldRegister = true
 	} else {
-		// Get set of current interaction names.
+		// Get set of current command names.
 		currInteractions, err := s.ApplicationCommands(s.State.User.ID, "")
 		if err != nil {
-			log.Errorln("Error getting current interactions:", err)
+			log.Errorln("Error getting current commands:", err)
 			return err
 		}
 		currNames := make(map[string]bool)
 		for i := range currInteractions {
 			currNames[currInteractions[i].Name] = true
 		}
-		log.Debugln("Current registered interaction names:", currNames)
+		log.Debugln("Current registered command names:", currNames)
 
-		// Check if set matches current interactions.
-		for i := range interactions {
-			if _, ok := currNames[interactions[i].Name]; !ok {
+		// Check if set matches current commands.
+		for i := range commands {
+			if _, ok := currNames[commands[i].Name]; !ok {
 				shouldRegister = true
 				break
 			}
@@ -54,39 +53,30 @@ func registerInteractions(s *discordgo.Session, force bool) (err error) {
 
 	// Register commands if needed.
 	if shouldRegister {
-		log.Println("Difference in command names found (or forced); re-registering interactions")
-		_, err = s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", interactions)
+		log.Println("Difference in command names found (or forced); re-registering commands")
+		_, err = s.ApplicationCommandBulkOverwrite(s.State.User.ID, "", commands)
 		return err
 	}
 
 	return nil
 }
 
-func handlePing(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	var err error
-
-	err = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: "Pong",
-		},
-	})
-	if err != nil {
-		log.Errorln("Error handling ping:", err)
+func handleCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if i.Type != discordgo.InteractionApplicationCommand {
+		return
 	}
-}
 
-func handleInteraction(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	// Handle commands.
 	name := i.ApplicationCommandData().Name
 	log.WithFields(logrus.Fields{
-		"name": name,
+		"cmd": name,
 	}).Debugln("Handling command")
-	if handler, ok := interactionHandlers[name]; ok {
+	if handler, ok := commandHandlers[name]; ok {
 		handler(s, i)
 	} else {
 		log.WithFields(logrus.Fields{
 			"name": name,
-		}).Warnln("Unknown interaction name")
+		}).Warnln("Unknown command name")
 	}
 }
 
@@ -97,7 +87,7 @@ func main() {
 	var forceRegisterInteractions bool
 	var debug bool
 	flag.StringVar(&authToken, "auth", "", "Authentication token for the Discord bot")
-	flag.BoolVar(&forceRegisterInteractions, "forcereg", false, "Whether to force re-registration of interactions")
+	flag.BoolVar(&forceRegisterInteractions, "forcereg", false, "Whether to force re-registration of commands")
 	flag.BoolVar(&debug, "debug", false, "Debug log level")
 	flag.Parse()
 
@@ -116,8 +106,15 @@ func main() {
 		log.Fatalln("Error creating discordgo instance:", err)
 	}
 
-	// Add interaction handler.
-	s.AddHandler(handleInteraction)
+	// Add command handler.
+	s.AddHandler(handleCommand)
+
+	// Add additional handlers.
+	for _, handlers := range handlerLists {
+		for _, handler := range handlers {
+			s.AddHandler(handler)
+		}
+	}
 
 	// TODO Register intents.
 
@@ -132,7 +129,7 @@ func main() {
 	// Register commands.
 	err = registerInteractions(s, forceRegisterInteractions)
 	if err != nil {
-		log.Fatalln("Error registering interactions")
+		log.Fatalln("Error registering commands")
 	}
 
 	// Wait for interrupt.
